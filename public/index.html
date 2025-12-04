@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BUET CSE 24 Buzzer Quiz</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app-root" class="app-root">
+    <div class="background-orbit"></div>
+    <header class="top-bar">
+      <div class="brand">
+        <div class="brand-logo">ب</div>
+        <div class="brand-text">
+          <div class="brand-title">BUET CSE '24</div>
+          <div class="brand-subtitle">Reception Night Buzzer Arena</div>
+        </div>
+      </div>
+      <div class="arena-pill">
+        <div class="arena-pill__label">Arena Code</div>
+        <div class="arena-pill__value" id="global-arena-code">-----</div>
+      </div>
+    </header>
+
+    <div id="entry-screen" class="entry-screen">
+      <div class="entry-container">
+        <div class="entry-card entry-card--admin">
+          <h2 class="entry-title">Admin Headquarters</h2>
+          <p class="entry-subtitle">Create a secure arena and share the code with your teams.</p>
+          <input id="admin-name-input" class="entry-input" type="text" placeholder="Admin name" maxlength="40" />
+          <button id="create-arena-btn" class="entry-btn entry-btn--primary">Create Arena</button>
+          <p class="entry-hint">Admins manage questions, scoring, and challenges.</p>
+        </div>
+
+        <div class="entry-card entry-card--participant">
+          <h2 class="entry-title">Join as Competitor</h2>
+          <p class="entry-subtitle">Enter the arena code provided by the quiz master and your team name.</p>
+          <input id="participant-name-input" class="entry-input" type="text" placeholder="Team name" maxlength="40" />
+          <input id="arena-code-input" class="entry-input" type="text" placeholder="Arena code" maxlength="5" />
+          <button id="join-arena-btn" class="entry-btn">Join Arena</button>
+          <p class="entry-hint">Buzzers unlock the moment you join.</p>
+        </div>
+      </div>
+      <div id="entry-message" class="entry-message hidden"></div>
+    </div>
+
+    <main class="layout">
+      <!-- Competitor View -->
+      <section class="panel panel-competitors hidden" id="panel-competitors">
+        <h2 class="panel-title">Competitor Console</h2>
+
+        <div class="info-card">
+          <div class="info-label">Arena Code</div>
+          <div id="participant-arena-code" class="info-value">-----</div>
+        </div>
+
+        <div class="info-card">
+          <div class="info-label">Your Team</div>
+          <div id="big-buzz-label" class="info-value">Waiting to join</div>
+        </div>
+
+        <div class="big-buzz-wrapper">
+          <button id="big-buzz-btn" class="big-buzz-btn" disabled>
+            BUZZ
+          </button>
+        </div>
+
+        <div class="challenge-wrapper" id="challenge-wrapper" hidden>
+          <div class="challenge-label">Challenge is open!</div>
+          <button id="challenge-buzz-btn" class="challenge-buzz-btn" disabled>
+            CHALLENGE
+          </button>
+        </div>
+
+        <div class="buzz-timeline">
+          <h3 class="buzz-title">Buzz Order</h3>
+          <ol id="buzz-order-list" class="buzz-order-list">
+            <li class="empty">Waiting for buzz...</li>
+          </ol>
+        </div>
+      </section>
+
+      <!-- Admin / Questioner View -->
+      <section class="panel panel-admin hidden" id="panel-admin">
+        <h2 class="panel-title">Question Control</h2>
+
+        <div class="status-card status-card--code">
+          <div class="status-label">Arena Code</div>
+          <div id="admin-arena-code" class="status-value status-value--code">-----</div>
+          <div class="status-subtext">Share this code so teams can enter your arena.</div>
+        </div>
+
+        <div class="status-card">
+          <div class="status-label">Current Answering Team</div>
+          <div id="current-answering" class="status-value">None yet</div>
+        </div>
+
+        <div class="status-card">
+          <div class="status-label">Scoreboard</div>
+          <div id="admin-scoreboard" class="admin-scoreboard"></div>
+        </div>
+
+        <div class="admin-actions">
+          <div class="admin-group">
+            <h3>Evaluate Answer</h3>
+            <div class="button-row">
+              <button id="btn-correct" class="action-btn success">Correct (+10)</button>
+              <button id="btn-wrong" class="action-btn danger">Wrong (-5)</button>
+            </div>
+          </div>
+
+          <div class="admin-group">
+            <h3>Challenge Phase</h3>
+            <p class="hint">Open challenges only after a wrong answer. The first challenger gets the mic.</p>
+            <div class="button-row button-row--single">
+              <button id="btn-open-challenge" class="action-btn neutral">Allow Challenges</button>
+            </div>
+            <div class="button-row">
+              <button id="btn-challenge-correct" class="action-btn success">Challenge Right (+20)</button>
+              <button id="btn-challenge-wrong" class="action-btn danger">Challenge Wrong (-20)</button>
+            </div>
+          </div>
+
+          <div class="admin-group">
+            <h3>Next Question</h3>
+            <div class="button-row">
+              <button id="btn-start-question" class="action-btn success">Start Question</button>
+              <button id="btn-next-question" class="action-btn neutral">Reset for Next Question</button>
+            </div>
+          </div>
+
+          <div class="admin-group">
+            <h3>Leaderboard Visibility</h3>
+            <div class="button-row">
+              <button id="btn-freeze-leaderboard" class="action-btn danger">Freeze Leaderboard</button>
+              <button id="btn-unfreeze-leaderboard" class="action-btn success">Reveal Leaderboard</button>
+            </div>
+          </div>
+
+          <div class="admin-group">
+            <h3>End Round</h3>
+            <p class="hint">Announce the champion and seal this arena.</p>
+            <div class="button-row">
+              <button id="btn-announce-final-winner" class="action-btn success">End Round & Announce Winner</button>
+              <button id="btn-show-winners" class="action-btn neutral">Previous Winners</button>
+            </div>
+            <div id="previous-winners-panel" class="previous-winners-panel" hidden>
+              <div class="previous-winners-header">
+                <div class="previous-winners-title">Previous Winners</div>
+                <button id="btn-close-winners" class="panel-close-btn" aria-label="Close previous winners">&times;</button>
+              </div>
+              <ul id="previous-winners-list" class="previous-winners-list"></ul>
+            </div>
+          </div>
+        </div>
+
+        <div class="log-panel">
+          <h3>Event Log</h3>
+          <div id="event-log" class="event-log"></div>
+        </div>
+      </section>
+
+      <!-- Shared status -->
+      <section class="panel panel-center">
+        <div class="ayah-card">
+          <div class="ayah-arabic">وَقُل رَّبِّ زِدْنِي عِلْمًا</div>
+          <div class="ayah-translation">“My Lord, increase me in knowledge.” (20:114)</div>
+        </div>
+
+        <div class="round-status">
+          <div id="round-status-text" class="round-status-text">Awaiting arena setup</div>
+        </div>
+
+        <div class="audience-leaderboard" id="audience-leaderboard">
+          <h3 class="buzz-title">Live Leaderboard</h3>
+          <div id="audience-scoreboard" class="admin-scoreboard"></div>
+        </div>
+
+        <div id="winner-flash" class="winner-flash hidden">
+          <div class="winner-inner">
+            <div class="winner-label">Champion</div>
+            <div id="winner-name" class="winner-name"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="credit-anchor" id="credit-anchor" role="contentinfo">
+    <div id="credit-panel" class="credit-panel">
+      <span class="credit-heading">Developed by</span>
+      <span class="credit-name">Rayyan Khalil</span>
+      <span class="credit-line">CSE, BUET</span>
+      <span class="credit-line">Student ID: 2305098</span>
+    </div>
+  </div>
+
+  <div id="toast-notice" class="toast-notice hidden" role="alert">
+    <div class="toast-inner" id="toast-message"></div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
