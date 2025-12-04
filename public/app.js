@@ -267,7 +267,7 @@ function showToast(message, options = {}) {
 function describeArenaClosure(reason) {
   switch (reason) {
     case 'round-complete':
-      return 'Arena sealed after winner announcement. Great job!';
+      return null;
     case 'admin-disconnected':
       return 'Admin disconnected. Please create or join another arena.';
     case 'replaced':
