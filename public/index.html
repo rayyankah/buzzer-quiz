@@ -101,9 +101,26 @@
           <div id="admin-scoreboard" class="admin-scoreboard"></div>
         </div>
 
+        <div class="status-card">
+          <div class="status-label">Buzz Queue</div>
+          <ol id="admin-buzz-order" class="buzz-order-list buzz-order-list--compact">
+            <li class="empty">Waiting for buzz...</li>
+          </ol>
+        </div>
+
+        <div class="status-card">
+          <div class="status-label">Challenge Queue</div>
+          <ol id="admin-challenge-order" class="buzz-order-list buzz-order-list--compact">
+            <li class="empty">No challengers yet.</li>
+          </ol>
+        </div>
+
         <div class="admin-actions">
           <div class="admin-group">
             <h3>Evaluate Answer</h3>
+            <select id="answering-team-select" class="select-team">
+              <option value="" disabled selected>Select team</option>
+            </select>
             <div class="button-row">
               <button id="btn-correct" class="action-btn success">Correct (+10)</button>
               <button id="btn-wrong" class="action-btn danger">Wrong (-5)</button>
@@ -113,9 +130,13 @@
           <div class="admin-group">
             <h3>Challenge Phase</h3>
             <p class="hint">Open challenges only after a wrong answer. The first challenger gets the mic.</p>
-            <div class="button-row button-row--single">
+            <div class="button-row">
               <button id="btn-open-challenge" class="action-btn neutral">Allow Challenges</button>
+              <button id="btn-close-challenge" class="action-btn danger">Disallow Challenges</button>
             </div>
+            <select id="challenge-team-select" class="select-team">
+              <option value="" disabled selected>Select challenger</option>
+            </select>
             <div class="button-row">
               <button id="btn-challenge-correct" class="action-btn success">Challenge Right (+20)</button>
               <button id="btn-challenge-wrong" class="action-btn danger">Challenge Wrong (-20)</button>
@@ -138,11 +159,11 @@
             </div>
           </div>
 
-          <div class="admin-group">
+          <div class="admin-group admin-group--end-round">
             <h3>End Round</h3>
             <p class="hint">Announce the champion and seal this arena.</p>
-            <div class="button-row">
-              <button id="btn-announce-final-winner" class="action-btn success">End Round & Announce Winner</button>
+            <div class="button-row button-row--end">
+              <button id="btn-announce-final-winner" class="action-btn success">End Round &amp; Announce Winner</button>
               <button id="btn-show-winners" class="action-btn neutral">Previous Winners</button>
             </div>
             <div id="previous-winners-panel" class="previous-winners-panel" hidden>
@@ -153,6 +174,7 @@
               <ul id="previous-winners-list" class="previous-winners-list"></ul>
             </div>
           </div>
+
         </div>
 
         <div class="log-panel">
@@ -194,10 +216,6 @@
       <span class="credit-line">CSE, BUET</span>
       <span class="credit-line">Student ID: 2305098</span>
     </div>
-  </div>
-
-  <div id="toast-notice" class="toast-notice hidden" role="alert">
-    <div class="toast-inner" id="toast-message"></div>
   </div>
 
   <script src="/socket.io/socket.io.js"></script>

@@ -34,10 +34,15 @@ const btnChallengeWrong = document.getElementById('btn-challenge-wrong');
 const btnNextQuestion = document.getElementById('btn-next-question');
 const btnStartQuestion = document.getElementById('btn-start-question');
 const btnOpenChallenge = document.getElementById('btn-open-challenge');
+const btnCloseChallenge = document.getElementById('btn-close-challenge');
 const btnFreezeLeaderboard = document.getElementById('btn-freeze-leaderboard');
 const btnUnfreezeLeaderboard = document.getElementById('btn-unfreeze-leaderboard');
+const answeringTeamSelect = document.getElementById('answering-team-select');
+const challengeTeamSelect = document.getElementById('challenge-team-select');
 const currentAnsweringEl = document.getElementById('current-answering');
 const buzzOrderList = document.getElementById('buzz-order-list');
+const adminBuzzOrderList = document.getElementById('admin-buzz-order');
+const adminChallengeOrderList = document.getElementById('admin-challenge-order');
 const eventLog = document.getElementById('event-log');
 const roundStatusText = document.getElementById('round-status-text');
 const adminScoreboard = document.getElementById('admin-scoreboard');
@@ -60,6 +65,9 @@ const clientState = {
   wrongAnswerTeamId: null,
   challengeAvailable: false,
   leaderboardFrozen: false,
+  answeredTeams: [],
+  challengeIneligibleTeams: [],
+  lastWrongAnswerTeamId: null,
 };
 
 const uiContext = {
@@ -109,6 +117,133 @@ function updateCurrentAnsweringDisplay(teamId) {
     currentAnsweringEl.textContent = 'None yet';
     currentAnsweringEl.classList.remove('status-value--active');
   }
+  if (answeringTeamSelect) {
+    const desired = teamId !== null && teamId !== undefined ? String(teamId) : '';
+    if (desired && answeringTeamSelect.value !== desired) {
+      answeringTeamSelect.value = desired;
+    }
+    if (!desired) {
+      answeringTeamSelect.value = '';
+    }
+  }
+}
+
+function populateAnsweringTeamSelect() {
+  if (!answeringTeamSelect) return;
+  const answeredSet = new Set(
+    Array.isArray(clientState.answeredTeams)
+      ? clientState.answeredTeams.map((value) => toNumber(value)).filter((value) => value !== null)
+      : []
+  );
+  const previouslySelected = answeringTeamSelect.value;
+  answeringTeamSelect.innerHTML = '';
+
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Select team';
+  placeholder.disabled = true;
+  answeringTeamSelect.appendChild(placeholder);
+
+  const addedTeamIds = new Set();
+
+  const appendOption = (id, label) => {
+    const numericId = toNumber(id);
+    if (numericId === null || addedTeamIds.has(numericId)) return;
+    const option = document.createElement('option');
+    option.value = String(numericId);
+    option.textContent = label || getTeamName(numericId);
+    if (answeredSet.has(numericId)) {
+      option.classList.add('team-option--answered');
+    }
+    answeringTeamSelect.appendChild(option);
+    addedTeamIds.add(numericId);
+  };
+
+  clientState.buzzOrder.forEach((entry) => {
+    appendOption(entry.id, entry.name || getTeamName(entry.id));
+  });
+
+  const knownIds = new Set([
+    ...Object.keys(teamNameMap || {}),
+    ...Object.keys(currentTeamScores || {}),
+  ]);
+  knownIds.forEach((id) => {
+    appendOption(id, getTeamName(id));
+  });
+
+  if (clientState.currentAnsweringTeam !== null && clientState.currentAnsweringTeam !== undefined) {
+    appendOption(clientState.currentAnsweringTeam, getTeamName(clientState.currentAnsweringTeam));
+  }
+
+  const desiredValue =
+    clientState.currentAnsweringTeam !== null && clientState.currentAnsweringTeam !== undefined
+      ? String(clientState.currentAnsweringTeam)
+      : previouslySelected;
+
+  if (desiredValue && Array.from(answeringTeamSelect.options).some((opt) => opt.value === desiredValue)) {
+    answeringTeamSelect.value = desiredValue;
+  } else {
+    answeringTeamSelect.value = '';
+  }
+
+  placeholder.selected = answeringTeamSelect.value === '';
+
+  const hasAnyTeamOption = answeringTeamSelect.options.length > 1;
+  answeringTeamSelect.disabled = !hasAnyTeamOption;
+}
+
+function populateChallengeTeamSelect() {
+  if (!challengeTeamSelect) return;
+  const previouslySelected = challengeTeamSelect.value;
+  challengeTeamSelect.innerHTML = '';
+
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Select challenger';
+  placeholder.disabled = true;
+  challengeTeamSelect.appendChild(placeholder);
+
+  clientState.challengeBuzzOrder.forEach((entry, index) => {
+    const numericId = toNumber(entry.id);
+    if (numericId === null) return;
+    const option = document.createElement('option');
+    option.value = String(numericId);
+    const label = entry.name || getTeamName(numericId);
+    option.textContent = `${label} (${index + 1})`;
+    challengeTeamSelect.appendChild(option);
+  });
+
+  if (previouslySelected && Array.from(challengeTeamSelect.options).some((opt) => opt.value === previouslySelected)) {
+    challengeTeamSelect.value = previouslySelected;
+  } else if (challengeTeamSelect.options.length > 1) {
+    challengeTeamSelect.selectedIndex = 1;
+  } else {
+    challengeTeamSelect.value = '';
+  }
+
+  placeholder.selected = challengeTeamSelect.value === '';
+  challengeTeamSelect.disabled = clientState.questionState !== 'challenge' || challengeTeamSelect.options.length <= 1;
+}
+
+function getSelectedAnsweringTeamId() {
+  if (!answeringTeamSelect) return clientState.currentAnsweringTeam;
+  const fromSelect = toNumber(answeringTeamSelect.value);
+  if (fromSelect !== null) return fromSelect;
+  return clientState.currentAnsweringTeam;
+}
+
+function getSelectedChallengeTeamId() {
+  if (!challengeTeamSelect) return clientState.challengeBuzzOrder[0]?.id || null;
+  const fromSelect = toNumber(challengeTeamSelect.value);
+  if (fromSelect !== null) return fromSelect;
+  const first = clientState.challengeBuzzOrder[0];
+  return first ? toNumber(first.id) : null;
+}
+
+function refreshAdminSelectors() {
+  populateAnsweringTeamSelect();
+  populateChallengeTeamSelect();
+  updateAdminControls();
 }
 
 bigBuzzBtn.addEventListener('click', () => {
@@ -127,28 +262,48 @@ challengeBuzzBtn.addEventListener('click', () => {
   flashBuzz(challengeBuzzBtn);
 });
 
-if (btnOpenChallenge) {
-  btnOpenChallenge.disabled = true;
-}
-
 btnCorrect.addEventListener('click', () => {
-  socket.emit('admin-evaluate-answer', { result: 'correct' });
+  const teamId = getSelectedAnsweringTeamId();
+  if (teamId === null || teamId === undefined) {
+    showToast('Select a team to evaluate before marking correct.', { intent: 'error' });
+    return;
+  }
+  socket.emit('admin-evaluate-answer', { result: 'correct', teamId });
 });
 
 btnWrong.addEventListener('click', () => {
-  socket.emit('admin-evaluate-answer', { result: 'wrong' });
+  const teamId = getSelectedAnsweringTeamId();
+  if (teamId === null || teamId === undefined) {
+    showToast('Select a team to evaluate before marking wrong.', { intent: 'error' });
+    return;
+  }
+  socket.emit('admin-evaluate-answer', { result: 'wrong', teamId });
 });
 
 btnChallengeCorrect.addEventListener('click', () => {
-  if (clientState.challengeBuzzOrder.length === 0) return;
-  const firstTeam = clientState.challengeBuzzOrder[0];
-  socket.emit('admin-evaluate-challenge', { team: firstTeam.id, result: 'correct' });
+  const teamId = getSelectedChallengeTeamId();
+  if (teamId === null || teamId === undefined) {
+    showToast('Select a challenger before marking correct.', { intent: 'error' });
+    return;
+  }
+  if (clientState.questionState !== 'challenge') {
+    showToast('Open the challenge phase before scoring a challenge.', { intent: 'error' });
+    return;
+  }
+  socket.emit('admin-evaluate-challenge', { team: teamId, result: 'correct' });
 });
 
 btnChallengeWrong.addEventListener('click', () => {
-  if (clientState.challengeBuzzOrder.length === 0) return;
-  const firstTeam = clientState.challengeBuzzOrder[0];
-  socket.emit('admin-evaluate-challenge', { team: firstTeam.id, result: 'wrong' });
+  const teamId = getSelectedChallengeTeamId();
+  if (teamId === null || teamId === undefined) {
+    showToast('Select a challenger before marking wrong.', { intent: 'error' });
+    return;
+  }
+  if (clientState.questionState !== 'challenge') {
+    showToast('Open the challenge phase before scoring a challenge.', { intent: 'error' });
+    return;
+  }
+  socket.emit('admin-evaluate-challenge', { team: teamId, result: 'wrong' });
 });
 
 btnNextQuestion.addEventListener('click', () => {
@@ -159,12 +314,37 @@ btnStartQuestion.addEventListener('click', () => {
   socket.emit('admin-start-question');
 });
 
-btnOpenChallenge.addEventListener('click', () => {
-  if (btnOpenChallenge.disabled) return;
-  socket.emit('admin-open-challenge');
-  logEvent('Admin opened challenge phase.');
-});
+if (btnOpenChallenge) {
+  btnOpenChallenge.addEventListener('click', () => {
+    if (clientState.questionState !== 'answering') {
+      showToast('Challenges can only be toggled while awaiting an answer.', { intent: 'error' });
+      return;
+    }
 
+    socket.emit('admin-open-challenge');
+    logEvent('Admin allowed challenges.');
+  });
+}
+
+if (btnCloseChallenge) {
+  btnCloseChallenge.addEventListener('click', () => {
+    if (clientState.questionState !== 'challenge') {
+      showToast('No active challenge phase to close.', { intent: 'error' });
+      return;
+    }
+    socket.emit('admin-close-challenge');
+    logEvent('Admin disallowed further challenges for now.');
+  });
+}
+
+
+if (answeringTeamSelect) {
+  answeringTeamSelect.addEventListener('change', () => {
+    const selected = toNumber(answeringTeamSelect.value);
+    if (selected === null) return;
+    socket.emit('admin-select-answer-team', { teamId: selected });
+  });
+}
 btnFreezeLeaderboard.addEventListener('click', () => {
   socket.emit('admin-set-leaderboard-frozen', { frozen: true });
   logEvent('Leaderboard frozen.');
@@ -289,6 +469,9 @@ function resetUiToEntry(message) {
   clientState.wrongAnswerTeamId = null;
   clientState.challengeAvailable = false;
   clientState.leaderboardFrozen = false;
+  clientState.answeredTeams = [];
+  clientState.challengeIneligibleTeams = [];
+  clientState.lastWrongAnswerTeamId = null;
 
   myTeamId = null;
   myTeamName = '';
@@ -333,6 +516,13 @@ function resetUiToEntry(message) {
   hideToast();
 
   showEntryScreen(message);
+
+  if (answeringTeamSelect) {
+    answeringTeamSelect.innerHTML = '';
+  }
+  if (challengeTeamSelect) {
+    challengeTeamSelect.innerHTML = '';
+  }
 }
 
 function activateAdminView({ code, adminName, previousWinners }) {
@@ -350,6 +540,8 @@ function activateAdminView({ code, adminName, previousWinners }) {
     roundStatusText.textContent = 'Arena live. Start when ready.';
   }
   logEvent(`Arena ${code} created. Share the code with teams.`);
+  populateAnsweringTeamSelect();
+  populateChallengeTeamSelect();
 }
 
 function activateParticipantView({ arenaCode, teamId, teamName }) {
@@ -424,8 +616,13 @@ socket.on('arena-created', ({ code, adminName, previousWinners }) => {
 });
 
 socket.on('arena-error', ({ message }) => {
-  if (createArenaBtn) createArenaBtn.disabled = false;
-  setEntryMessage(message || 'Unable to create arena. Please try again.');
+  const display = message || 'Unable to process arena action. Please try again.';
+  if (!uiContext.role) {
+    if (createArenaBtn) createArenaBtn.disabled = false;
+    setEntryMessage(display);
+  } else {
+    showToast(display, { intent: 'error', duration: 3200 });
+  }
 });
 
 socket.on('participant-join-success', ({ teamId, teamName, arenaCode }) => {
@@ -558,6 +755,10 @@ function updateBuzzButtonState() {
     numericTeamId !== null &&
     clientState.buzzOrder.some((entry) => toNumber(entry.id) === numericTeamId);
 
+  const hasAnsweredBefore =
+    numericTeamId !== null &&
+    clientState.answeredTeams.some((id) => toNumber(id) === numericTeamId);
+
   const hasBuzzedChallenge =
     numericTeamId !== null &&
     clientState.challengeBuzzOrder.some(
@@ -565,13 +766,17 @@ function updateBuzzButtonState() {
     );
 
   const canBuzz =
-    phase === 'open' &&
+    phase === 'answering' &&
     numericTeamId !== null &&
     Boolean(myTeamName) &&
-    !hasBuzzedPrimary;
+    !hasBuzzedPrimary &&
+    !hasAnsweredBefore;
   bigBuzzBtn.disabled = !canBuzz;
 
   const wrongId = toNumber(clientState.wrongAnswerTeamId);
+  const challengeIneligible =
+    numericTeamId !== null &&
+    clientState.challengeIneligibleTeams.some((id) => toNumber(id) === numericTeamId);
   const isWrongAnsweringTeam =
     numericTeamId !== null && wrongId !== null && numericTeamId === wrongId;
 
@@ -580,7 +785,8 @@ function updateBuzzButtonState() {
     numericTeamId !== null &&
     Boolean(myTeamName) &&
     !isWrongAnsweringTeam &&
-    !hasBuzzedChallenge;
+    !hasBuzzedChallenge &&
+    !challengeIneligible;
 
   if (challengeWrapper) {
     if (canChallenge) {
@@ -605,22 +811,22 @@ function updateBuzzButtonState() {
   }
 }
 
-function renderBuzzOrder(order, { isChallenge = false } = {}) {
-  if (!buzzOrderList) return;
-  buzzOrderList.innerHTML = '';
+function renderQueueList(listElement, order, { isChallenge = false, emptyText } = {}) {
+  if (!listElement) return;
+  listElement.innerHTML = '';
 
-  const activeOrder = Array.isArray(order) ? order : [];
-  if (activeOrder.length === 0) {
+  const entries = Array.isArray(order) ? order : [];
+  const answeredSet = new Set(Array.isArray(clientState.answeredTeams) ? clientState.answeredTeams : []);
+
+  if (entries.length === 0) {
     const li = document.createElement('li');
     li.className = 'empty';
-    li.textContent = isChallenge
-      ? 'Waiting for challenge buzz...'
-      : 'Waiting for buzz...';
-    buzzOrderList.appendChild(li);
+    li.textContent = emptyText || (isChallenge ? 'Waiting for challenge buzz...' : 'Waiting for buzz...');
+    listElement.appendChild(li);
     return;
   }
 
-  activeOrder.forEach((entry, index) => {
+  entries.forEach((entry, index) => {
     const li = document.createElement('li');
     li.classList.add('buzz-pos');
 
@@ -631,21 +837,61 @@ function renderBuzzOrder(order, { isChallenge = false } = {}) {
     }
 
     const rankLabel = isChallenge ? `C${index + 1}` : index + 1;
-    const displayName = entry.name || getTeamName(entry.id);
+    const numericId = toNumber(entry.id);
+    const displayName = entry.name || getTeamName(numericId !== null ? numericId : entry.id);
+
+    if (!isChallenge && numericId !== null && answeredSet.has(numericId)) {
+      li.classList.add('buzz-pos--answered');
+    }
+
     li.innerHTML = `
       <span class="buzz-rank">${rankLabel}</span>
       <span class="buzz-name">${displayName}</span>
     `;
-    buzzOrderList.appendChild(li);
+    listElement.appendChild(li);
   });
 }
 
+function renderAdminQueues() {
+  renderQueueList(adminBuzzOrderList, clientState.buzzOrder, {
+    isChallenge: false,
+    emptyText: 'Waiting for buzz...',
+  });
+
+  renderQueueList(adminChallengeOrderList, clientState.challengeBuzzOrder, {
+    isChallenge: true,
+    emptyText: 'No challengers yet.',
+  });
+}
+
+function renderBuzzOrder(order, { isChallenge = false } = {}) {
+  renderQueueList(buzzOrderList, order, {
+    isChallenge,
+    emptyText: isChallenge ? 'Waiting for challenge buzz...' : 'Waiting for buzz...',
+  });
+  renderAdminQueues();
+}
+
 function updateAdminControls() {
-  if (!btnOpenChallenge) return;
-  const allowReady = !!clientState.challengeAvailable;
-  btnOpenChallenge.disabled = !allowReady;
-  btnOpenChallenge.classList.toggle('action-btn--ready', allowReady);
-  btnOpenChallenge.textContent = 'Allow Challenge';
+  if (btnOpenChallenge) {
+    const challengeLive = clientState.questionState === 'challenge';
+    const canOpen = clientState.questionState === 'answering';
+    btnOpenChallenge.disabled = !canOpen;
+    btnOpenChallenge.classList.toggle('action-btn--ready', canOpen && clientState.challengeAvailable);
+    btnOpenChallenge.textContent = challengeLive ? 'Challenges Live' : 'Allow Challenges';
+  }
+
+  if (btnCloseChallenge) {
+    const canClose = clientState.questionState === 'challenge';
+    btnCloseChallenge.disabled = !canClose;
+    btnCloseChallenge.classList.toggle('action-btn--ready', canClose);
+  }
+
+  if (btnCorrect) btnCorrect.disabled = false;
+  if (btnWrong) btnWrong.disabled = false;
+
+  if (btnChallengeCorrect) btnChallengeCorrect.disabled = false;
+  if (btnChallengeWrong) btnChallengeWrong.disabled = false;
 }
 
 function logEvent(message) {
@@ -693,23 +939,44 @@ socket.on('state-sync', (state) => {
   clientState.wrongAnswerTeamId = toNumber(state.wrongAnswerTeamId);
   clientState.challengeAvailable = !!state.challengeAvailable;
   clientState.leaderboardFrozen = !!state.leaderboardFrozen;
+  clientState.answeredTeams = Array.isArray(state.answeredTeams)
+    ? state.answeredTeams.map((value) => toNumber(value)).filter((value) => value !== null)
+    : [];
+  clientState.challengeIneligibleTeams = Array.isArray(state.challengeIneligibleTeams)
+    ? state.challengeIneligibleTeams.map((value) => toNumber(value)).filter((value) => value !== null)
+    : [];
+  clientState.lastWrongAnswerTeamId = toNumber(state.lastWrongAnswerTeamId);
 
   setScores(state.teamScores || {});
 
   if (roundStatusText) {
-    if (clientState.questionState === 'challenge') {
-      const wrongTeamName = getTeamName(state.wrongAnswerTeamId);
-      setRoundStatus(
-        wrongTeamName
-          ? `Challenge open! Initial answer from ${highlightName(wrongTeamName)} was wrong. Teams can now buzz to challenge.`
-          : 'Challenge phase active. Teams can now buzz to challenge.'
-      );
-    } else if (clientState.questionState === 'open') {
-      setRoundStatus('Question live. Waiting for buzz...');
-    } else if (clientState.questionState === 'closed') {
-      setRoundStatus('Question closed. Awaiting next action from admin.');
-    } else {
-      setRoundStatus('Ready for next question');
+    const currentAnswering = getTeamName(clientState.currentAnsweringTeam);
+    switch (clientState.questionState) {
+      case 'challenge': {
+        const wrongTeamName = getTeamName(clientState.wrongAnswerTeamId);
+        setRoundStatus(
+          wrongTeamName
+            ? `Challenge open! Initial answer from ${highlightName(wrongTeamName)} was wrong. Teams can now buzz to challenge.`
+            : 'Challenge phase active. Teams can now buzz to challenge.'
+        );
+        break;
+      }
+      case 'answering': {
+        if (currentAnswering) {
+          setRoundStatus(`${highlightName(currentAnswering)} has the mic. Awaiting answer...`);
+        } else if (clientState.buzzOrder.length > 0) {
+          setRoundStatus('Awaiting admin selection for the next answer.');
+        } else {
+          setRoundStatus('Question live. Waiting for buzz...');
+        }
+        break;
+      }
+      case 'finished':
+        setRoundStatus('Question complete. Prepare the next move.');
+        break;
+      default:
+        setRoundStatus('Ready for next question');
+        break;
     }
   }
 
@@ -725,15 +992,20 @@ socket.on('state-sync', (state) => {
 
   updateCurrentAnsweringDisplay(clientState.currentAnsweringTeam);
   updateBuzzButtonState();
-  updateAdminControls();
+  refreshAdminSelectors();
 });
 
-socket.on('buzz-update', ({ buzzOrder, currentAnsweringTeam }) => {
-  clientState.questionState = 'open';
+socket.on('buzz-update', ({ buzzOrder, currentAnsweringTeam, answeredTeams }) => {
+  clientState.questionState = 'answering';
   clientState.buzzOrder = Array.isArray(buzzOrder) ? buzzOrder : [];
   clientState.challengeBuzzOrder = [];
   clientState.currentAnsweringTeam = toNumber(currentAnsweringTeam);
   clientState.wrongAnswerTeamId = null;
+  if (Array.isArray(answeredTeams)) {
+    clientState.answeredTeams = answeredTeams
+      .map((value) => toNumber(value))
+      .filter((value) => value !== null);
+  }
 
   renderBuzzOrder(clientState.buzzOrder);
 
@@ -741,11 +1013,13 @@ socket.on('buzz-update', ({ buzzOrder, currentAnsweringTeam }) => {
   updateCurrentAnsweringDisplay(clientState.currentAnsweringTeam);
 
   if (roundStatusText) {
-    setRoundStatus(
-      answeringName
-        ? `${highlightName(answeringName)} has the mic. Awaiting answer...`
-        : 'Waiting for buzz...'
-    );
+    if (answeringName) {
+      setRoundStatus(`${highlightName(answeringName)} has the mic. Awaiting answer...`);
+    } else if (clientState.buzzOrder.length > 0) {
+      setRoundStatus('Awaiting admin selection for the next answer.');
+    } else {
+      setRoundStatus('Waiting for buzz...');
+    }
   }
 
   const last = clientState.buzzOrder[clientState.buzzOrder.length - 1];
@@ -757,7 +1031,132 @@ socket.on('buzz-update', ({ buzzOrder, currentAnsweringTeam }) => {
   }
 
   updateBuzzButtonState();
-  updateAdminControls();
+  refreshAdminSelectors();
+});
+
+socket.on('answering-team-selected', ({ teamId, teamName }) => {
+  const numericId = toNumber(teamId);
+  clientState.currentAnsweringTeam = numericId;
+  if (teamName) {
+    logEvent(`Admin selected ${teamName} to answer.`);
+  } else if (numericId !== null) {
+    logEvent(`Admin selected ${getTeamName(numericId)} to answer.`);
+  }
+  updateCurrentAnsweringDisplay(clientState.currentAnsweringTeam);
+  refreshAdminSelectors();
+});
+
+socket.on('answer-evaluated', ({ teamId, result, teamName, nextAnsweringTeam, challengeAvailable, questionState }) => {
+  const numericId = toNumber(teamId);
+  const displayName = teamName || getTeamName(numericId);
+
+  if (numericId !== null) {
+    clientState.answeredTeams = Array.from(
+      new Set([...clientState.answeredTeams, numericId])
+    );
+    clientState.challengeIneligibleTeams = Array.from(
+      new Set([...clientState.challengeIneligibleTeams, numericId])
+    );
+  }
+
+  if (typeof questionState === 'string') {
+    clientState.questionState = questionState;
+  }
+
+  if (typeof challengeAvailable === 'boolean') {
+    clientState.challengeAvailable = challengeAvailable;
+  }
+
+  if (result === 'wrong') {
+    clientState.wrongAnswerTeamId = numericId;
+    clientState.lastWrongAnswerTeamId = numericId;
+
+    if (nextAnsweringTeam !== undefined) {
+      clientState.currentAnsweringTeam = toNumber(nextAnsweringTeam);
+    }
+
+    if (!questionState) {
+      clientState.questionState = 'answering';
+    }
+
+    if (displayName) {
+      logEvent(`Answer marked wrong for ${displayName}.`);
+    }
+
+    if (numericId !== null && numericId === toNumber(myTeamId)) {
+      showToast('Wrong answer. Eyes on the challenge window.', {
+        intent: 'error',
+        duration: 2800,
+      });
+    }
+  } else if (result === 'correct') {
+    clientState.wrongAnswerTeamId = null;
+    clientState.lastWrongAnswerTeamId = null;
+    clientState.currentAnsweringTeam = numericId;
+
+    if (typeof challengeAvailable !== 'boolean') {
+      clientState.challengeAvailable = false;
+    }
+
+    if (!questionState) {
+      clientState.questionState = 'finished';
+    }
+
+    if (displayName) {
+      logEvent(`Answer marked correct for ${displayName}.`);
+    }
+  }
+
+  const showingChallenge = clientState.questionState === 'challenge';
+  if (showingChallenge) {
+    renderBuzzOrder(clientState.challengeBuzzOrder, { isChallenge: true });
+  } else {
+    renderBuzzOrder(clientState.buzzOrder);
+  }
+
+  updateCurrentAnsweringDisplay(clientState.currentAnsweringTeam);
+  updateBuzzButtonState();
+  refreshAdminSelectors();
+});
+
+socket.on('challenge-evaluated', ({ teamId, result, teamName, nextAnsweringTeam }) => {
+  const numericId = toNumber(teamId);
+  const displayName = teamName || getTeamName(numericId);
+
+  if (numericId !== null) {
+    clientState.challengeIneligibleTeams = Array.from(
+      new Set([...clientState.challengeIneligibleTeams, numericId])
+    );
+  }
+
+  clientState.challengeBuzzOrder = [];
+
+  if (result === 'correct') {
+    if (displayName) {
+      logEvent(`Challenge by ${displayName} succeeded.`);
+    }
+    clientState.questionState = 'finished';
+    clientState.currentAnsweringTeam = numericId;
+    clientState.wrongAnswerTeamId = null;
+  } else {
+    if (displayName) {
+      logEvent(`Challenge by ${displayName} failed.`);
+    }
+    clientState.currentAnsweringTeam = toNumber(nextAnsweringTeam);
+    clientState.questionState = clientState.currentAnsweringTeam ? 'answering' : 'finished';
+    clientState.wrongAnswerTeamId = null;
+  }
+
+  const showingChallenge = clientState.questionState === 'challenge';
+  if (showingChallenge) {
+    renderBuzzOrder(clientState.challengeBuzzOrder, { isChallenge: true });
+  } else {
+    renderBuzzOrder(clientState.buzzOrder);
+  }
+
+  updateCurrentAnsweringDisplay(clientState.currentAnsweringTeam);
+  updateBuzzButtonState();
+  refreshAdminSelectors();
 });
 
 socket.on('score-update', ({ teamScores, teamNames }) => {
@@ -779,55 +1178,23 @@ socket.on('team-update', ({ teamId, name, score }) => {
   };
   setScores(currentTeamScores);
 });
-
-socket.on('challenge-available', ({ wrongAnswerTeamId, wrongTeamName, buzzOrder }) => {
-  clientState.questionState = 'closed';
-  clientState.challengeAvailable = true;
-  clientState.wrongAnswerTeamId = toNumber(wrongAnswerTeamId);
-  clientState.challengeBuzzOrder = [];
-  if (Array.isArray(buzzOrder)) {
-    clientState.buzzOrder = buzzOrder;
-  }
-  clientState.currentAnsweringTeam = null;
-
-  const displayName = wrongTeamName || getTeamName(wrongAnswerTeamId);
-  if (roundStatusText) {
-    setRoundStatus(
-      displayName
-        ? `${highlightName(displayName)} missed. Admin may allow a challenge.`
-        : 'Answer marked wrong. Admin may allow a challenge.'
-    );
-  }
-  if (displayName) {
-    logEvent(`Answer marked wrong for ${displayName}.`);
-  } else {
-    logEvent('Answer marked wrong. Waiting for admin to open challenge.');
-  }
-
-  if (toNumber(myTeamId) === clientState.wrongAnswerTeamId) {
-    showToast('Wrong answer. Eyes on the challenge window.', {
-      intent: 'error',
-      duration: 2800,
-    });
-  }
-
-  updateCurrentAnsweringDisplay(null);
-  renderBuzzOrder(clientState.buzzOrder, { isChallenge: false });
-  updateBuzzButtonState();
-  updateAdminControls();
-});
-
-socket.on('challenge-open', ({ currentAnsweringTeam, buzzOrder, wrongAnswerTeamId }) => {
+ 
+socket.on('challenge-open', ({ currentAnsweringTeam, buzzOrder, wrongAnswerTeamId, challengeIneligibleTeams }) => {
   clientState.questionState = 'challenge';
   clientState.challengeAvailable = false;
   clientState.buzzOrder = Array.isArray(buzzOrder) ? buzzOrder : clientState.buzzOrder;
   clientState.challengeBuzzOrder = [];
-  clientState.currentAnsweringTeam = null;
+  clientState.currentAnsweringTeam = toNumber(currentAnsweringTeam);
   clientState.wrongAnswerTeamId = toNumber(
     wrongAnswerTeamId !== undefined && wrongAnswerTeamId !== null
       ? wrongAnswerTeamId
       : currentAnsweringTeam
   );
+  if (Array.isArray(challengeIneligibleTeams)) {
+    clientState.challengeIneligibleTeams = challengeIneligibleTeams
+      .map((value) => toNumber(value))
+      .filter((value) => value !== null);
+  }
 
   const wrongTeamName = getTeamName(clientState.wrongAnswerTeamId);
   setRoundStatus(
@@ -842,9 +1209,32 @@ socket.on('challenge-open', ({ currentAnsweringTeam, buzzOrder, wrongAnswerTeamI
   }
 
   renderBuzzOrder(clientState.challengeBuzzOrder, { isChallenge: true });
-  updateCurrentAnsweringDisplay(null);
+  updateCurrentAnsweringDisplay(clientState.currentAnsweringTeam);
   updateBuzzButtonState();
   updateAdminControls();
+  refreshAdminSelectors();
+});
+
+socket.on('challenge-closed', ({ reason }) => {
+  if (clientState.questionState === 'challenge') {
+    clientState.questionState = 'answering';
+  }
+  clientState.challengeAvailable = false;
+  clientState.challengeBuzzOrder = [];
+
+  if (roundStatusText) {
+    const statusMessage = reason === 'admin'
+      ? 'Challenges closed. Select the next answering team.'
+      : 'Challenge phase closed.';
+    setRoundStatus(statusMessage);
+  }
+
+  logEvent('Challenge phase closed.');
+  renderBuzzOrder(clientState.buzzOrder, { isChallenge: false });
+  updateCurrentAnsweringDisplay(clientState.currentAnsweringTeam);
+  updateBuzzButtonState();
+  updateAdminControls();
+  refreshAdminSelectors();
 });
 
 socket.on('question-ended', ({ reason, winningTeam }) => {
@@ -861,16 +1251,25 @@ socket.on('question-ended', ({ reason, winningTeam }) => {
       setRoundStatus('Question ended after failed challenge.');
       logEvent('Challenge failed.');
     }
+  } else if (reason === 'exhausted') {
+    setRoundStatus('Question ended. No teams remaining.');
+    logEvent('Question ended with no remaining teams.');
+  } else {
+    setRoundStatus('Question ended.');
+    logEvent('Question closed.');
   }
+
   clientState.questionState = 'closed';
   clientState.currentAnsweringTeam = null;
   clientState.wrongAnswerTeamId = null;
   clientState.challengeBuzzOrder = [];
   clientState.challengeAvailable = false;
+
   updateCurrentAnsweringDisplay(null);
   renderBuzzOrder(clientState.buzzOrder, { isChallenge: false });
   updateBuzzButtonState();
   updateAdminControls();
+  refreshAdminSelectors();
 });
 
 socket.on('state-reset', ({ teamScores, teamNames, buzzOrder, challengeBuzzOrder, currentAnsweringTeam, wrongAnswerTeamId }) => {
@@ -928,9 +1327,13 @@ socket.on('challenge-buzz-update', ({ challengeBuzzOrder: newChallengebuzzOrder 
         setRoundStatus(`${highlightName(challengerName)} is challenging! Await admin verdict.`);
       }
     }
+  } else {
+    clientState.currentAnsweringTeam = null;
+    updateCurrentAnsweringDisplay(null);
   }
 
   updateBuzzButtonState();
+  refreshAdminSelectors();
 });
 
 socket.on('previous-winners', ({ winners }) => {

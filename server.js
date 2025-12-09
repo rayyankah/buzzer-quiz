@@ -14,6 +14,45 @@ app.use(express.static(path.join(__dirname, 'public')));
 const arenas = new Map();
 const socketContexts = new Map();
 
+function normalizeTeamId(value) {
+  const parsed = parseInt(value, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function serializeSet(setInstance) {
+  if (!setInstance) return [];
+  return Array.from(setInstance);
+}
+
+function ensureArenaTracking(arena) {
+  if (!arena.answeredTeams || !(arena.answeredTeams instanceof Set)) {
+    arena.answeredTeams = new Set();
+  }
+  if (!arena.challengeIneligibleTeams || !(arena.challengeIneligibleTeams instanceof Set)) {
+    arena.challengeIneligibleTeams = new Set();
+  }
+}
+
+function markTeamAnswered(arena, teamId) {
+  const normalized = normalizeTeamId(teamId);
+  if (normalized === null) return;
+  ensureArenaTracking(arena);
+  arena.answeredTeams.add(normalized);
+  arena.challengeIneligibleTeams.add(normalized);
+}
+
+function markTeamChallengeIneligible(arena, teamId) {
+  const normalized = normalizeTeamId(teamId);
+  if (normalized === null) return;
+  ensureArenaTracking(arena);
+  arena.challengeIneligibleTeams.add(normalized);
+}
+
+function hasRemainingAnswerCandidates(arena) {
+  ensureArenaTracking(arena);
+  return arena.buzzOrder.some((entry) => !arena.answeredTeams.has(entry.id));
+}
+
 function arenaRoom(code) {
   return `arena:${code}`;
 }
@@ -55,6 +94,9 @@ function buildState(arena) {
     teamScores: arena.teamScores,
     teamNames: arena.teamNames,
     leaderboardFrozen: arena.leaderboardFrozen,
+    answeredTeams: serializeSet(arena.answeredTeams),
+    challengeIneligibleTeams: serializeSet(arena.challengeIneligibleTeams),
+    lastWrongAnswerTeamId: arena.lastWrongAnswerTeamId,
   };
 }
 
@@ -80,8 +122,10 @@ function resetForNextQuestion(arena, { clearTeams = false } = {}) {
   arena.wrongAnswerTeamId = null;
   arena.challengeAvailable = false;
   arena.questionState = 'idle';
-  arena.hasEvaluatedAnswer = false;
-  arena.hasEvaluatedChallenge = false;
+  arena.lastWrongAnswerTeamId = null;
+  ensureArenaTracking(arena);
+  arena.answeredTeams.clear();
+  arena.challengeIneligibleTeams.clear();
 
   if (clearTeams) {
     arena.teamScores = {};
@@ -117,6 +161,9 @@ function removeTeamFromArena(arena, teamId) {
   if (arena.wrongAnswerTeamId === teamId) {
     arena.wrongAnswerTeamId = null;
   }
+  ensureArenaTracking(arena);
+  arena.answeredTeams.delete(teamId);
+  arena.challengeIneligibleTeams.delete(teamId);
 }
 
 function getAdminContext(arena) {
@@ -195,8 +242,9 @@ io.on('connection', (socket) => {
       leaderboardFrozen: false,
       questionState: 'idle',
       challengeAvailable: false,
-      hasEvaluatedAnswer: false,
-      hasEvaluatedChallenge: false,
+      answeredTeams: new Set(),
+      challengeIneligibleTeams: new Set(),
+      lastWrongAnswerTeamId: null,
     };
 
     arenas.set(code, arena);
@@ -277,31 +325,34 @@ io.on('connection', (socket) => {
     const arena = arenas.get(ctx.arenaCode);
     if (!arena) return;
 
+    ensureArenaTracking(arena);
+
     const teamId = ctx.teamId;
     const displayName = arena.teamNames[teamId] || ctx.teamName || `Team ${teamId}`;
 
-    if (arena.questionState === 'open') {
-      if (arena.buzzOrder.find((entry) => entry.id === teamId)) return;
+    if (arena.questionState === 'answering') {
+      if (arena.answeredTeams.has(teamId)) return;
+      if (arena.buzzOrder.some((entry) => entry.id === teamId)) return;
 
       arena.buzzOrder.push({ id: teamId, name: displayName });
-
-      if (arena.buzzOrder.length === 1) {
-        arena.currentAnsweringTeam = teamId;
-      }
 
       io.to(arenaRoom(arena.code)).emit('buzz-update', {
         buzzOrder: arena.buzzOrder,
         currentAnsweringTeam: arena.currentAnsweringTeam,
+        answeredTeams: serializeSet(arena.answeredTeams),
       });
+      emitState(arena);
     } else if (arena.questionState === 'challenge') {
-      if (teamId === arena.wrongAnswerTeamId) return;
-      if (arena.challengeBuzzOrder.find((entry) => entry.id === teamId)) return;
+      if (arena.challengeIneligibleTeams.has(teamId)) return;
+      if (teamId === arena.currentAnsweringTeam) return;
+      if (arena.challengeBuzzOrder.some((entry) => entry.id === teamId)) return;
 
       arena.challengeBuzzOrder.push({ id: teamId, name: displayName });
 
       io.to(arenaRoom(arena.code)).emit('challenge-buzz-update', {
         challengeBuzzOrder: arena.challengeBuzzOrder,
       });
+      emitState(arena);
     }
   });
 
@@ -312,16 +363,19 @@ io.on('connection', (socket) => {
     const arena = arenas.get(ctx.arenaCode);
     if (!arena) return;
 
-    if (arena.questionState === 'open') return;
+    if (arena.questionState === 'answering') return;
 
-    arena.questionState = 'open';
+    arena.questionState = 'answering';
     arena.buzzOrder = [];
     arena.challengeBuzzOrder = [];
     arena.currentAnsweringTeam = null;
     arena.wrongAnswerTeamId = null;
+    arena.lastWrongAnswerTeamId = null;
     arena.challengeAvailable = false;
-    arena.hasEvaluatedAnswer = false;
-    arena.hasEvaluatedChallenge = false;
+
+    ensureArenaTracking(arena);
+    arena.answeredTeams.clear();
+    arena.challengeIneligibleTeams.clear();
 
     emitState(arena);
     io.to(arenaRoom(arena.code)).emit('question-started', {
@@ -329,45 +383,110 @@ io.on('connection', (socket) => {
     });
   });
 
-  socket.on('admin-evaluate-answer', ({ result }) => {
+  socket.on('admin-select-answer-team', ({ teamId }) => {
     const ctx = socketContexts.get(socket.id);
     if (!ctx || ctx.role !== 'admin' || !ctx.arenaCode) return;
 
     const arena = arenas.get(ctx.arenaCode);
     if (!arena) return;
-    if (arena.questionState !== 'open') return;
-    if (!arena.currentAnsweringTeam) return;
-    if (arena.hasEvaluatedAnswer) return;
+
+    ensureArenaTracking(arena);
+    const selectedTeam = normalizeTeamId(teamId);
+    if (selectedTeam === null) return;
+    if (!Object.prototype.hasOwnProperty.call(arena.teamScores, selectedTeam)) return;
+
+    arena.currentAnsweringTeam = selectedTeam;
+    emitState(arena);
+    io.to(arenaRoom(arena.code)).emit('answering-team-selected', {
+      teamId: selectedTeam,
+      teamName: arena.teamNames[selectedTeam] || `Team ${selectedTeam}`,
+    });
+  });
+
+  socket.on('admin-evaluate-answer', ({ result, teamId }) => {
+    const ctx = socketContexts.get(socket.id);
+    if (!ctx || ctx.role !== 'admin' || !ctx.arenaCode) return;
+
+    const arena = arenas.get(ctx.arenaCode);
+    if (!arena) return;
+
+    ensureArenaTracking(arena);
+
+    const selectedTeam = normalizeTeamId(
+      teamId !== undefined ? teamId : arena.currentAnsweringTeam,
+    );
+    if (selectedTeam === null) return;
+    if (!Object.prototype.hasOwnProperty.call(arena.teamScores, selectedTeam)) return;
+
+    const teamName = arena.teamNames[selectedTeam] || `Team ${selectedTeam}`;
+    const isActiveRound =
+      arena.questionState === 'answering' || arena.questionState === 'challenge';
+    const challengeActive = arena.questionState === 'challenge';
 
     if (result === 'correct') {
-      const winningTeam = arena.currentAnsweringTeam;
-      arena.teamScores[winningTeam] = (arena.teamScores[winningTeam] || 0) + 10;
-      arena.hasEvaluatedAnswer = true;
-      arena.questionState = 'closed';
-      arena.challengeAvailable = false;
-      arena.wrongAnswerTeamId = null;
-      arena.currentAnsweringTeam = null;
+      arena.teamScores[selectedTeam] = (arena.teamScores[selectedTeam] || 0) + 10;
+
+      if (isActiveRound) {
+        markTeamAnswered(arena, selectedTeam);
+        arena.questionState = 'finished';
+        arena.challengeAvailable = false;
+        arena.currentAnsweringTeam = selectedTeam;
+        arena.wrongAnswerTeamId = null;
+        arena.lastWrongAnswerTeamId = null;
+        arena.challengeBuzzOrder = [];
+      } else {
+        arena.currentAnsweringTeam = selectedTeam;
+        arena.wrongAnswerTeamId = null;
+      }
 
       emitScoreUpdate(arena);
-      io.to(arenaRoom(arena.code)).emit('question-ended', {
-        reason: 'answered',
-        winningTeam: arena.teamNames[winningTeam] || null,
+      emitState(arena);
+      io.to(arenaRoom(arena.code)).emit('answer-evaluated', {
+        teamId: selectedTeam,
+        result: 'correct',
+        teamName,
+        questionState: arena.questionState,
+        challengeAvailable: arena.challengeAvailable,
       });
+
+      if (isActiveRound) {
+        io.to(arenaRoom(arena.code)).emit('question-ended', {
+          reason: 'answered',
+          winningTeam: teamName,
+        });
+      }
     } else if (result === 'wrong') {
-      const answeringTeam = arena.currentAnsweringTeam;
-      arena.teamScores[answeringTeam] = (arena.teamScores[answeringTeam] || 0) - 5;
-      arena.hasEvaluatedAnswer = true;
-      arena.questionState = 'closed';
-      arena.challengeAvailable = true;
-      arena.wrongAnswerTeamId = answeringTeam;
-      arena.challengeBuzzOrder = [];
-      arena.currentAnsweringTeam = null;
+      arena.teamScores[selectedTeam] = (arena.teamScores[selectedTeam] || 0) - 5;
+
+      if (isActiveRound) {
+        markTeamAnswered(arena, selectedTeam);
+        arena.wrongAnswerTeamId = selectedTeam;
+        arena.lastWrongAnswerTeamId = selectedTeam;
+        arena.currentAnsweringTeam = null;
+
+        if (challengeActive) {
+          arena.challengeAvailable = false;
+          arena.questionState = 'challenge';
+        } else {
+          arena.challengeAvailable = true;
+          arena.challengeBuzzOrder = [];
+          arena.questionState = 'answering';
+        }
+      } else {
+        arena.wrongAnswerTeamId = null;
+        arena.lastWrongAnswerTeamId = selectedTeam;
+        arena.currentAnsweringTeam = null;
+      }
 
       emitScoreUpdate(arena);
-      io.to(arenaRoom(arena.code)).emit('challenge-available', {
-        wrongAnswerTeamId: answeringTeam,
-        wrongTeamName: arena.teamNames[answeringTeam] || null,
-        buzzOrder: arena.buzzOrder,
+      emitState(arena);
+      io.to(arenaRoom(arena.code)).emit('answer-evaluated', {
+        teamId: selectedTeam,
+        result: 'wrong',
+        teamName,
+        nextAnsweringTeam: arena.currentAnsweringTeam,
+        challengeAvailable: arena.challengeAvailable,
+        questionState: arena.questionState,
       });
     }
   });
@@ -377,17 +496,53 @@ io.on('connection', (socket) => {
     if (!ctx || ctx.role !== 'admin' || !ctx.arenaCode) return;
 
     const arena = arenas.get(ctx.arenaCode);
-    if (!arena || !arena.challengeAvailable) return;
+    if (!arena || arena.questionState !== 'answering') return;
+
+    ensureArenaTracking(arena);
 
     arena.challengeAvailable = false;
     arena.questionState = 'challenge';
     arena.challengeBuzzOrder = [];
 
+    const activeAnswerTeam = normalizeTeamId(arena.currentAnsweringTeam);
+    if (activeAnswerTeam !== null) {
+      markTeamChallengeIneligible(arena, activeAnswerTeam);
+    }
+
     io.to(arenaRoom(arena.code)).emit('challenge-open', {
-      currentAnsweringTeam: arena.currentAnsweringTeam,
       buzzOrder: arena.buzzOrder,
+      currentAnsweringTeam: arena.currentAnsweringTeam,
       wrongAnswerTeamId: arena.wrongAnswerTeamId,
+      challengeIneligibleTeams: serializeSet(arena.challengeIneligibleTeams),
     });
+    emitState(arena);
+  });
+
+  socket.on('admin-close-challenge', () => {
+    const ctx = socketContexts.get(socket.id);
+    if (!ctx || ctx.role !== 'admin' || !ctx.arenaCode) return;
+
+    const arena = arenas.get(ctx.arenaCode);
+    if (!arena || arena.questionState !== 'challenge') return;
+
+    ensureArenaTracking(arena);
+
+    arena.challengeBuzzOrder = [];
+    arena.challengeAvailable = false;
+    arena.wrongAnswerTeamId = null;
+    arena.questionState = hasRemainingAnswerCandidates(arena) ? 'answering' : 'finished';
+
+    emitState(arena);
+    io.to(arenaRoom(arena.code)).emit('challenge-closed', {
+      reason: 'admin',
+    });
+
+    if (arena.questionState === 'finished') {
+      io.to(arenaRoom(arena.code)).emit('question-ended', {
+        reason: 'exhausted',
+        winningTeam: null,
+      });
+    }
   });
 
   socket.on('admin-evaluate-challenge', ({ team, result }) => {
@@ -397,31 +552,72 @@ io.on('connection', (socket) => {
     const arena = arenas.get(ctx.arenaCode);
     if (!arena) return;
     if (arena.questionState !== 'challenge') return;
-    if (arena.hasEvaluatedChallenge) return;
-    if (!team) return;
 
-    if (!Object.prototype.hasOwnProperty.call(arena.teamScores, team)) {
+    ensureArenaTracking(arena);
+
+    const selectedTeam = normalizeTeamId(
+      team !== undefined && team !== null
+        ? team
+        : (arena.challengeBuzzOrder[0] && arena.challengeBuzzOrder[0].id),
+    );
+    if (selectedTeam === null) return;
+    if (!arena.challengeBuzzOrder.some((entry) => entry.id === selectedTeam)) return;
+
+    if (!Object.prototype.hasOwnProperty.call(arena.teamScores, selectedTeam)) {
       socket.emit('arena-error', { message: 'Selected team is not part of this arena.' });
       return;
     }
 
+    const teamName = arena.teamNames[selectedTeam] || `Team ${selectedTeam}`;
+
     if (result === 'correct') {
-      arena.teamScores[team] = (arena.teamScores[team] || 0) + 20;
+      arena.teamScores[selectedTeam] = (arena.teamScores[selectedTeam] || 0) + 20;
+      markTeamChallengeIneligible(arena, selectedTeam);
+      arena.challengeBuzzOrder = [];
+      arena.challengeAvailable = false;
+      arena.questionState = 'finished';
+      arena.wrongAnswerTeamId = null;
+      arena.lastWrongAnswerTeamId = null;
+      arena.currentAnsweringTeam = selectedTeam;
+
+      emitScoreUpdate(arena);
+      emitState(arena);
+      io.to(arenaRoom(arena.code)).emit('challenge-evaluated', {
+        teamId: selectedTeam,
+        result: 'correct',
+        teamName,
+      });
+      io.to(arenaRoom(arena.code)).emit('question-ended', {
+        reason: 'challenge',
+        winningTeam: teamName,
+      });
     } else if (result === 'wrong') {
-      arena.teamScores[team] = (arena.teamScores[team] || 0) - 20;
+      arena.teamScores[selectedTeam] = (arena.teamScores[selectedTeam] || 0) - 20;
+      markTeamChallengeIneligible(arena, selectedTeam);
+      arena.challengeBuzzOrder = [];
+      arena.challengeAvailable = false;
+      arena.wrongAnswerTeamId = null;
+      arena.lastWrongAnswerTeamId = null;
+      const hasCandidates = hasRemainingAnswerCandidates(arena);
+      arena.currentAnsweringTeam = null;
+      arena.questionState = hasCandidates ? 'answering' : 'finished';
+
+      emitScoreUpdate(arena);
+      emitState(arena);
+      io.to(arenaRoom(arena.code)).emit('challenge-evaluated', {
+        teamId: selectedTeam,
+        result: 'wrong',
+        teamName,
+        nextAnsweringTeam: arena.currentAnsweringTeam,
+      });
+
+      if (!hasCandidates) {
+        io.to(arenaRoom(arena.code)).emit('question-ended', {
+          reason: 'exhausted',
+          winningTeam: null,
+        });
+      }
     }
-
-    arena.hasEvaluatedChallenge = true;
-    arena.questionState = 'closed';
-    arena.challengeBuzzOrder = [];
-    arena.challengeAvailable = false;
-    arena.wrongAnswerTeamId = null;
-
-    emitScoreUpdate(arena);
-    io.to(arenaRoom(arena.code)).emit('question-ended', {
-      reason: 'challenge',
-      winningTeam: result === 'correct' ? (arena.teamNames[team] || null) : null,
-    });
   });
 
   socket.on('admin-next-question', () => {
