@@ -78,7 +78,7 @@ function generateTeamId(arena) {
   let id;
   do {
     id = Math.floor(100000 + Math.random() * 900000);
-  } while (arena.teamScores[id]);
+  } while (Object.prototype.hasOwnProperty.call(arena.teamScores, id));
   return id;
 }
 
@@ -147,7 +147,7 @@ function resetForNextQuestion(arena, { clearTeams = false } = {}) {
 }
 
 function removeTeamFromArena(arena, teamId) {
-  if (!arena.teamScores[teamId]) return;
+  if (!Object.prototype.hasOwnProperty.call(arena.teamScores, teamId)) return;
 
   delete arena.teamScores[teamId];
   delete arena.teamNames[teamId];
