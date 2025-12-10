@@ -403,7 +403,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  socket.on('admin-evaluate-answer', ({ result, teamId }) => {
+  socket.on('admin-evaluate-answer', ({ result, teamId, bonus }) => {
     const ctx = socketContexts.get(socket.id);
     if (!ctx || ctx.role !== 'admin' || !ctx.arenaCode) return;
 
@@ -423,8 +423,11 @@ io.on('connection', (socket) => {
       arena.questionState === 'answering' || arena.questionState === 'challenge';
     const challengeActive = arena.questionState === 'challenge';
 
+    const bonusApplied = !!bonus;
+
     if (result === 'correct') {
-      arena.teamScores[selectedTeam] = (arena.teamScores[selectedTeam] || 0) + 10;
+      const pointsAwarded = 10 + (bonusApplied ? 5 : 0);
+      arena.teamScores[selectedTeam] = (arena.teamScores[selectedTeam] || 0) + pointsAwarded;
 
       if (isActiveRound) {
         markTeamAnswered(arena, selectedTeam);
@@ -447,6 +450,8 @@ io.on('connection', (socket) => {
         teamName,
         questionState: arena.questionState,
         challengeAvailable: arena.challengeAvailable,
+        pointsDelta: pointsAwarded,
+        bonusApplied,
       });
 
       if (isActiveRound) {
@@ -456,7 +461,8 @@ io.on('connection', (socket) => {
         });
       }
     } else if (result === 'wrong') {
-      arena.teamScores[selectedTeam] = (arena.teamScores[selectedTeam] || 0) - 5;
+      const pointsDelta = -5;
+      arena.teamScores[selectedTeam] = (arena.teamScores[selectedTeam] || 0) + pointsDelta;
 
       if (isActiveRound) {
         markTeamAnswered(arena, selectedTeam);
@@ -487,6 +493,8 @@ io.on('connection', (socket) => {
         nextAnsweringTeam: arena.currentAnsweringTeam,
         challengeAvailable: arena.challengeAvailable,
         questionState: arena.questionState,
+        pointsDelta,
+        bonusApplied,
       });
     }
   });
@@ -545,7 +553,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('admin-evaluate-challenge', ({ team, result }) => {
+  socket.on('admin-evaluate-challenge', ({ team, result, bonus }) => {
     const ctx = socketContexts.get(socket.id);
     if (!ctx || ctx.role !== 'admin' || !ctx.arenaCode) return;
 
@@ -570,8 +578,11 @@ io.on('connection', (socket) => {
 
     const teamName = arena.teamNames[selectedTeam] || `Team ${selectedTeam}`;
 
+    const bonusApplied = !!bonus;
+
     if (result === 'correct') {
-      arena.teamScores[selectedTeam] = (arena.teamScores[selectedTeam] || 0) + 20;
+      const pointsAwarded = 20 + (bonusApplied ? 5 : 0);
+      arena.teamScores[selectedTeam] = (arena.teamScores[selectedTeam] || 0) + pointsAwarded;
       markTeamChallengeIneligible(arena, selectedTeam);
       arena.challengeBuzzOrder = [];
       arena.challengeAvailable = false;
@@ -586,13 +597,16 @@ io.on('connection', (socket) => {
         teamId: selectedTeam,
         result: 'correct',
         teamName,
+        pointsDelta: pointsAwarded,
+        bonusApplied,
       });
       io.to(arenaRoom(arena.code)).emit('question-ended', {
         reason: 'challenge',
         winningTeam: teamName,
       });
     } else if (result === 'wrong') {
-      arena.teamScores[selectedTeam] = (arena.teamScores[selectedTeam] || 0) - 20;
+      const pointsDelta = -20;
+      arena.teamScores[selectedTeam] = (arena.teamScores[selectedTeam] || 0) + pointsDelta;
       markTeamChallengeIneligible(arena, selectedTeam);
       arena.challengeBuzzOrder = [];
       arena.challengeAvailable = false;
@@ -609,6 +623,8 @@ io.on('connection', (socket) => {
         result: 'wrong',
         teamName,
         nextAnsweringTeam: arena.currentAnsweringTeam,
+        pointsDelta,
+        bonusApplied,
       });
 
       if (!hasCandidates) {
@@ -618,6 +634,39 @@ io.on('connection', (socket) => {
         });
       }
     }
+  });
+
+  socket.on('admin-custom-score', ({ teamId, delta }) => {
+    const ctx = socketContexts.get(socket.id);
+    if (!ctx || ctx.role !== 'admin' || !ctx.arenaCode) return;
+
+    const arena = arenas.get(ctx.arenaCode);
+    if (!arena) return;
+
+    const normalizedTeam = normalizeTeamId(teamId);
+    const numericDelta = Number(delta);
+
+    if (normalizedTeam === null || !Number.isFinite(numericDelta) || numericDelta === 0) {
+      socket.emit('arena-error', { message: 'Provide a valid non-zero number for custom scoring.' });
+      return;
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(arena.teamScores, normalizedTeam)) {
+      socket.emit('arena-error', { message: 'Selected team is not part of this arena.' });
+      return;
+    }
+
+    arena.teamScores[normalizedTeam] = (arena.teamScores[normalizedTeam] || 0) + numericDelta;
+
+    emitScoreUpdate(arena);
+    emitState(arena);
+
+    io.to(arenaRoom(arena.code)).emit('custom-score-applied', {
+      teamId: normalizedTeam,
+      teamName: arena.teamNames[normalizedTeam] || `Team ${normalizedTeam}`,
+      delta: numericDelta,
+      updatedScore: arena.teamScores[normalizedTeam],
+    });
   });
 
   socket.on('admin-next-question', () => {

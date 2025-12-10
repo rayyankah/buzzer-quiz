@@ -125,6 +125,10 @@
               <button id="btn-correct" class="action-btn success">Correct (+10)</button>
               <button id="btn-wrong" class="action-btn danger">Wrong (-5)</button>
             </div>
+            <label class="bonus-toggle">
+              <input id="answer-bonus-toggle" type="checkbox" />
+              <span>Apply +5 bonus</span>
+            </label>
           </div>
 
           <div class="admin-group">
@@ -141,6 +145,23 @@
               <button id="btn-challenge-correct" class="action-btn success">Challenge Right (+20)</button>
               <button id="btn-challenge-wrong" class="action-btn danger">Challenge Wrong (-20)</button>
             </div>
+            <label class="bonus-toggle">
+              <input id="challenge-bonus-toggle" type="checkbox" />
+              <span>Apply +5 bonus</span>
+            </label>
+          </div>
+
+          <div class="admin-group admin-group--custom">
+            <h3>Custom Scoring</h3>
+            <p class="hint">Apply manual adjustments anytime.</p>
+            <select id="custom-team-select" class="select-team">
+              <option value="" disabled selected>Select team</option>
+            </select>
+            <div class="custom-score-controls">
+              <input id="custom-score-input" class="custom-score-input" type="number" step="1" placeholder="Points" />
+              <button id="btn-apply-custom-score" class="action-btn neutral">Apply</button>
+            </div>
+            <p class="custom-score-note">Positive or negative values supported.</p>
           </div>
 
           <div class="admin-group">

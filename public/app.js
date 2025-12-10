@@ -37,6 +37,11 @@ const btnOpenChallenge = document.getElementById('btn-open-challenge');
 const btnCloseChallenge = document.getElementById('btn-close-challenge');
 const btnFreezeLeaderboard = document.getElementById('btn-freeze-leaderboard');
 const btnUnfreezeLeaderboard = document.getElementById('btn-unfreeze-leaderboard');
+const answerBonusToggle = document.getElementById('answer-bonus-toggle');
+const challengeBonusToggle = document.getElementById('challenge-bonus-toggle');
+const customTeamSelect = document.getElementById('custom-team-select');
+const customScoreInput = document.getElementById('custom-score-input');
+const btnApplyCustomScore = document.getElementById('btn-apply-custom-score');
 const answeringTeamSelect = document.getElementById('answering-team-select');
 const challengeTeamSelect = document.getElementById('challenge-team-select');
 const currentAnsweringEl = document.getElementById('current-answering');
@@ -107,6 +112,25 @@ function getTeamName(teamId) {
   return `Team ${numericId}`;
 }
 
+function getAllKnownTeamIds() {
+  const ids = new Set();
+
+  const addId = (value) => {
+    const numeric = toNumber(value);
+    if (numeric !== null) {
+      ids.add(numeric);
+    }
+  };
+
+  clientState.buzzOrder.forEach((entry) => addId(entry.id));
+  clientState.challengeBuzzOrder.forEach((entry) => addId(entry.id));
+
+  Object.keys(teamNameMap || {}).forEach((id) => addId(id));
+  Object.keys(currentTeamScores || {}).forEach((id) => addId(id));
+
+  return Array.from(ids);
+}
+
 function updateCurrentAnsweringDisplay(teamId) {
   if (!currentAnsweringEl) return;
   const name = getTeamName(teamId);
@@ -163,11 +187,11 @@ function populateAnsweringTeamSelect() {
     appendOption(entry.id, entry.name || getTeamName(entry.id));
   });
 
-  const knownIds = new Set([
-    ...Object.keys(teamNameMap || {}),
-    ...Object.keys(currentTeamScores || {}),
-  ]);
-  knownIds.forEach((id) => {
+  clientState.challengeBuzzOrder.forEach((entry) => {
+    appendOption(entry.id, entry.name || getTeamName(entry.id));
+  });
+
+  getAllKnownTeamIds().forEach((id) => {
     appendOption(id, getTeamName(id));
   });
 
@@ -225,6 +249,41 @@ function populateChallengeTeamSelect() {
   challengeTeamSelect.disabled = clientState.questionState !== 'challenge' || challengeTeamSelect.options.length <= 1;
 }
 
+function populateCustomTeamSelect() {
+  if (!customTeamSelect) return;
+  const previouslySelected = customTeamSelect.value;
+  customTeamSelect.innerHTML = '';
+
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Select team';
+  placeholder.disabled = true;
+  customTeamSelect.appendChild(placeholder);
+
+  const ids = getAllKnownTeamIds().sort((a, b) => {
+    const nameA = (getTeamName(a) || '').toLowerCase();
+    const nameB = (getTeamName(b) || '').toLowerCase();
+    if (nameA === nameB) return a - b;
+    return nameA.localeCompare(nameB);
+  });
+
+  ids.forEach((id) => {
+    const option = document.createElement('option');
+    option.value = String(id);
+    option.textContent = getTeamName(id);
+    customTeamSelect.appendChild(option);
+  });
+
+  if (previouslySelected && Array.from(customTeamSelect.options).some((opt) => opt.value === previouslySelected)) {
+    customTeamSelect.value = previouslySelected;
+  } else {
+    customTeamSelect.value = '';
+  }
+
+  placeholder.selected = customTeamSelect.value === '';
+  customTeamSelect.disabled = customTeamSelect.options.length <= 1;
+}
+
 function getSelectedAnsweringTeamId() {
   if (!answeringTeamSelect) return clientState.currentAnsweringTeam;
   const fromSelect = toNumber(answeringTeamSelect.value);
@@ -243,6 +302,7 @@ function getSelectedChallengeTeamId() {
 function refreshAdminSelectors() {
   populateAnsweringTeamSelect();
   populateChallengeTeamSelect();
+  populateCustomTeamSelect();
   updateAdminControls();
 }
 
@@ -268,7 +328,8 @@ btnCorrect.addEventListener('click', () => {
     showToast('Select a team to evaluate before marking correct.', { intent: 'error' });
     return;
   }
-  socket.emit('admin-evaluate-answer', { result: 'correct', teamId });
+  const bonus = !!(answerBonusToggle && answerBonusToggle.checked);
+  socket.emit('admin-evaluate-answer', { result: 'correct', teamId, bonus });
 });
 
 btnWrong.addEventListener('click', () => {
@@ -290,7 +351,8 @@ btnChallengeCorrect.addEventListener('click', () => {
     showToast('Open the challenge phase before scoring a challenge.', { intent: 'error' });
     return;
   }
-  socket.emit('admin-evaluate-challenge', { team: teamId, result: 'correct' });
+  const bonus = !!(challengeBonusToggle && challengeBonusToggle.checked);
+  socket.emit('admin-evaluate-challenge', { team: teamId, result: 'correct', bonus });
 });
 
 btnChallengeWrong.addEventListener('click', () => {
@@ -305,6 +367,44 @@ btnChallengeWrong.addEventListener('click', () => {
   }
   socket.emit('admin-evaluate-challenge', { team: teamId, result: 'wrong' });
 });
+
+if (btnApplyCustomScore) {
+  btnApplyCustomScore.addEventListener('click', () => {
+    if (!customTeamSelect) return;
+    const teamId = toNumber(customTeamSelect.value);
+    if (teamId === null) {
+      showToast('Select a team before applying custom score.', { intent: 'error' });
+      return;
+    }
+    const rawValue = customScoreInput ? customScoreInput.value.trim() : '';
+    const delta = Number(rawValue);
+    if (!rawValue) {
+      showToast('Enter the number of points to apply.', { intent: 'error' });
+      return;
+    }
+    if (!Number.isFinite(delta)) {
+      showToast('Use a valid number for custom scoring.', { intent: 'error' });
+      return;
+    }
+    if (delta === 0) {
+      showToast('Custom adjustment must be non-zero.', { intent: 'error' });
+      return;
+    }
+    socket.emit('admin-custom-score', { teamId, delta });
+    if (customScoreInput) {
+      customScoreInput.value = '';
+    }
+  });
+}
+
+if (customScoreInput) {
+  customScoreInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (btnApplyCustomScore) btnApplyCustomScore.click();
+    }
+  });
+}
 
 btnNextQuestion.addEventListener('click', () => {
   socket.emit('admin-next-question');
@@ -523,6 +623,18 @@ function resetUiToEntry(message) {
   if (challengeTeamSelect) {
     challengeTeamSelect.innerHTML = '';
   }
+  if (customTeamSelect) {
+    customTeamSelect.innerHTML = '';
+  }
+  if (customScoreInput) {
+    customScoreInput.value = '';
+  }
+  if (answerBonusToggle) {
+    answerBonusToggle.checked = false;
+  }
+  if (challengeBonusToggle) {
+    challengeBonusToggle.checked = false;
+  }
 }
 
 function activateAdminView({ code, adminName, previousWinners }) {
@@ -542,6 +654,7 @@ function activateAdminView({ code, adminName, previousWinners }) {
   logEvent(`Arena ${code} created. Share the code with teams.`);
   populateAnsweringTeamSelect();
   populateChallengeTeamSelect();
+  populateCustomTeamSelect();
 }
 
 function activateParticipantView({ arenaCode, teamId, teamName }) {
@@ -745,6 +858,7 @@ function setScores(teamScores = {}) {
   renderScoreboard(adminScoreboard, sorted);
   renderScoreboard(audienceScoreboard, sorted);
   updateCurrentAnsweringDisplay(clientState.currentAnsweringTeam);
+  populateCustomTeamSelect();
 }
 
 function updateBuzzButtonState() {
@@ -1046,9 +1160,11 @@ socket.on('answering-team-selected', ({ teamId, teamName }) => {
   refreshAdminSelectors();
 });
 
-socket.on('answer-evaluated', ({ teamId, result, teamName, nextAnsweringTeam, challengeAvailable, questionState }) => {
+socket.on('answer-evaluated', ({ teamId, result, teamName, nextAnsweringTeam, challengeAvailable, questionState, pointsDelta, bonusApplied }) => {
   const numericId = toNumber(teamId);
   const displayName = teamName || getTeamName(numericId);
+  const deltaText = typeof pointsDelta === 'number' ? `${pointsDelta > 0 ? '+' : ''}${pointsDelta}` : null;
+  const bonusSuffix = bonusApplied ? ' (bonus)' : '';
 
   if (numericId !== null) {
     clientState.answeredTeams = Array.from(
@@ -1080,7 +1196,12 @@ socket.on('answer-evaluated', ({ teamId, result, teamName, nextAnsweringTeam, ch
     }
 
     if (displayName) {
-      logEvent(`Answer marked wrong for ${displayName}.`);
+      const detail = deltaText ? ` (${deltaText})` : '';
+      logEvent(`Answer marked wrong for ${displayName}${detail}.`);
+    }
+
+    if (answerBonusToggle) {
+      answerBonusToggle.checked = false;
     }
 
     if (numericId !== null && numericId === toNumber(myTeamId)) {
@@ -1093,6 +1214,9 @@ socket.on('answer-evaluated', ({ teamId, result, teamName, nextAnsweringTeam, ch
     clientState.wrongAnswerTeamId = null;
     clientState.lastWrongAnswerTeamId = null;
     clientState.currentAnsweringTeam = numericId;
+    if (answerBonusToggle) {
+      answerBonusToggle.checked = false;
+    }
 
     if (typeof challengeAvailable !== 'boolean') {
       clientState.challengeAvailable = false;
@@ -1103,7 +1227,8 @@ socket.on('answer-evaluated', ({ teamId, result, teamName, nextAnsweringTeam, ch
     }
 
     if (displayName) {
-      logEvent(`Answer marked correct for ${displayName}.`);
+      const detail = deltaText ? ` (${deltaText})` : '';
+      logEvent(`Answer marked correct for ${displayName}${detail}${bonusSuffix}.`);
     }
   }
 
@@ -1119,9 +1244,11 @@ socket.on('answer-evaluated', ({ teamId, result, teamName, nextAnsweringTeam, ch
   refreshAdminSelectors();
 });
 
-socket.on('challenge-evaluated', ({ teamId, result, teamName, nextAnsweringTeam }) => {
+socket.on('challenge-evaluated', ({ teamId, result, teamName, nextAnsweringTeam, pointsDelta, bonusApplied }) => {
   const numericId = toNumber(teamId);
   const displayName = teamName || getTeamName(numericId);
+  const deltaText = typeof pointsDelta === 'number' ? `${pointsDelta > 0 ? '+' : ''}${pointsDelta}` : null;
+  const bonusSuffix = bonusApplied ? ' (bonus)' : '';
 
   if (numericId !== null) {
     clientState.challengeIneligibleTeams = Array.from(
@@ -1133,18 +1260,26 @@ socket.on('challenge-evaluated', ({ teamId, result, teamName, nextAnsweringTeam 
 
   if (result === 'correct') {
     if (displayName) {
-      logEvent(`Challenge by ${displayName} succeeded.`);
+      const detail = deltaText ? ` (${deltaText})` : '';
+      logEvent(`Challenge by ${displayName} succeeded${detail}${bonusSuffix}.`);
     }
     clientState.questionState = 'finished';
     clientState.currentAnsweringTeam = numericId;
     clientState.wrongAnswerTeamId = null;
+    if (challengeBonusToggle) {
+      challengeBonusToggle.checked = false;
+    }
   } else {
     if (displayName) {
-      logEvent(`Challenge by ${displayName} failed.`);
+      const detail = deltaText ? ` (${deltaText})` : '';
+      logEvent(`Challenge by ${displayName} failed${detail}.`);
     }
     clientState.currentAnsweringTeam = toNumber(nextAnsweringTeam);
     clientState.questionState = clientState.currentAnsweringTeam ? 'answering' : 'finished';
     clientState.wrongAnswerTeamId = null;
+    if (challengeBonusToggle) {
+      challengeBonusToggle.checked = false;
+    }
   }
 
   const showingChallenge = clientState.questionState === 'challenge';
@@ -1157,6 +1292,24 @@ socket.on('challenge-evaluated', ({ teamId, result, teamName, nextAnsweringTeam 
   updateCurrentAnsweringDisplay(clientState.currentAnsweringTeam);
   updateBuzzButtonState();
   refreshAdminSelectors();
+});
+
+socket.on('custom-score-applied', ({ teamId, delta, teamName, updatedScore }) => {
+  const numericId = toNumber(teamId);
+  const name = teamName || getTeamName(numericId);
+  const deltaText = Number(delta) > 0 ? `+${Number(delta)}` : `${Number(delta)}`;
+  if (name) {
+    logEvent(`Custom score ${deltaText} applied to ${name}.`);
+  }
+  if (numericId !== null && numericId === toNumber(myTeamId)) {
+    showToast(`Score adjusted: ${deltaText} points.`, {
+      intent: Number(delta) >= 0 ? 'success' : 'error',
+      duration: 2600,
+    });
+  }
+  if (typeof updatedScore === 'number' && name && uiContext.role === 'admin') {
+    showToast(`${name} now at ${updatedScore} points.`, { intent: 'success', duration: 2200 });
+  }
 });
 
 socket.on('score-update', ({ teamScores, teamNames }) => {
